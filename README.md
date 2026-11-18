@@ -24,6 +24,7 @@ Ollama / LM Studio / llama.cpp / vLLM などのローカルLLMの前段に置く
 8. [環境変数](#環境変数)
 9. [API の対応状況](#api-の対応状況)
 10. [開発](#開発)
+11. [ライセンス](#ライセンス)
 
 ---
 
@@ -360,3 +361,7 @@ go test -race ./...                 # Windows では CGO が要るため、Linux
 - タイムアウトのテストは、遅延や停止を再現できるモック上流と、差し替え可能な時計を使います。実際の時間は待ちません。
 - 実際のモデルと公式 SDK を使う結合テストは [scripts/integration](scripts/integration/README.md) にあります（任意実行）。
 - 仕様は [SPEC.md](SPEC.md) にあります。
+
+## ライセンス
+
+[NYSL Version 0.9982](LICENSE)（煮るなり焼くなり好きにしろライセンス）です。
