@@ -1,0 +1,7 @@
+/llmgw
+/llmgw.exe
+/data/
+*.db
+*.db-shm
+*.db-wal
+.env

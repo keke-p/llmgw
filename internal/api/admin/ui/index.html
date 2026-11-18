@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>llmgw 管理</title>
+<link rel="stylesheet" href="assets/app.css?v={{VERSION}}">
+<script src="assets/app.js?v={{VERSION}}" defer></script>
+</head>
+<body>
+<div id="app">
+  <aside id="nav" hidden>
+    <div class="brand">llmgw</div>
+    <nav>
+      <a href="#/dashboard" data-route="dashboard">ダッシュボード</a>
+      <a href="#/keys" data-route="keys">キー</a>
+      <a href="#/providers" data-route="providers">プロバイダ</a>
+      <a href="#/aliases" data-route="aliases">エイリアス</a>
+      <a href="#/playground" data-route="playground">Playground</a>
+      <a href="#/logs" data-route="logs">ログ</a>
+      <a href="#/settings" data-route="settings">設定</a>
+      <a href="#/audit" data-route="audit">監査ログ</a>
+    </nav>
+    <div class="nav-foot">
+      <span id="whoami"></span>
+      <button id="logout" class="link">ログアウト</button>
+    </div>
+  </aside>
+  <main id="main"></main>
+</div>
+<div id="modal-root"></div>
+<div id="toasts"></div>
+</body>
+</html>

@@ -1,0 +1,41 @@
+# Sample docker-compose for llmgw behind Traefik.
+# Copy .env.example to .env and set the secrets before starting.
+services:
+  llmgw:
+    image: llmgw:latest
+    build: .
+    restart: unless-stopped
+    environment:
+      LLMGW_SECRET_KEY: ${LLMGW_SECRET_KEY:?set LLMGW_SECRET_KEY in .env}
+      LLMGW_ADMIN_PASSWORD: ${LLMGW_ADMIN_PASSWORD:-}
+      # Traefik's network; X-Forwarded-For from these addresses is trusted.
+      LLMGW_TRUSTED_PROXIES: ${LLMGW_TRUSTED_PROXIES:-172.16.0.0/12}
+      LLMGW_LOG_LEVEL: info
+    volumes:
+      - llmgw-data:/data
+    # Reach Ollama / LM Studio running on the Docker host as http://host.docker.internal:11434
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - traefik
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik
+      - traefik.http.routers.llmgw.rule=Host(`llm.example.com`)
+      - traefik.http.routers.llmgw.entrypoints=websecure
+      - traefik.http.routers.llmgw.tls.certresolver=letsencrypt
+      - traefik.http.services.llmgw.loadbalancer.server.port=4000
+      # Optional: protect the admin UI with forward auth and let llmgw trust it
+      # (also set LLMGW_ADMIN_TRUST_HEADER=X-Forwarded-User).
+      # - traefik.http.routers.llmgw-admin.rule=Host(`llm.example.com`) && PathPrefix(`/admin`)
+      # - traefik.http.routers.llmgw-admin.entrypoints=websecure
+      # - traefik.http.routers.llmgw-admin.tls.certresolver=letsencrypt
+      # - traefik.http.routers.llmgw-admin.middlewares=auth@file
+      # - traefik.http.routers.llmgw-admin.service=llmgw
+
+volumes:
+  llmgw-data:
+
+networks:
+  traefik:
+    external: true
