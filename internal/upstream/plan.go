@@ -396,11 +396,29 @@ func Call(ctx context.Context, client *http.Client, p *store.Provider, method, p
 	if p.Type == store.ProviderOpenAICompatible {
 		base = OpenAIBase(base)
 	}
+	return CallURL(ctx, client, p, method, joinURL(base, path), body)
+}
+
+// ServerRoot returns a provider base URL without a trailing "/v1" or
+// "/api/v1", e.g. "http://host:1234/v1" -> "http://host:1234". LM Studio serves
+// its native REST API (/api/v1/...) there.
+func ServerRoot(base string) string {
+	base = strings.TrimRight(base, "/")
+	for _, suf := range []string{"/api/v1", "/v1"} {
+		if strings.HasSuffix(base, suf) {
+			return strings.TrimSuffix(base, suf)
+		}
+	}
+	return base
+}
+
+// CallURL is Call with an absolute URL (the provider supplies the API key).
+func CallURL(ctx context.Context, client *http.Client, p *store.Provider, method, u string, body []byte) ([]byte, error) {
 	var rd io.Reader
 	if body != nil {
 		rd = bytes.NewReader(body)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, joinURL(base, path), rd)
+	req, err := http.NewRequestWithContext(ctx, method, u, rd)
 	if err != nil {
 		return nil, err
 	}

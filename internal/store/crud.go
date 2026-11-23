@@ -225,9 +225,10 @@ func (s *Store) CreateAlias(ctx context.Context, a *Alias) error {
 	defer tx.Rollback()
 	now := time.Now()
 	res, err := tx.ExecContext(ctx, `INSERT INTO aliases(name, enabled, description, ttft_timeout_ms, idle_timeout_ms,
-		max_duration_ms, fallback_on_ttft_timeout, params_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		max_duration_ms, fallback_on_ttft_timeout, params_json, model_info_json, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		a.Name, boolInt(a.Enabled), a.Description, durMs(a.TTFTTimeout), durMs(a.IdleTimeout), durMs(a.MaxDuration),
-		fallbackArg(a.FallbackOnTTFTTimeout), params(a), now.UnixMilli(), now.UnixMilli())
+		fallbackArg(a.FallbackOnTTFTTimeout), params(a), a.ModelInfo.encode(), now.UnixMilli(), now.UnixMilli())
 	if err != nil {
 		return classify(err)
 	}
@@ -249,9 +250,9 @@ func (s *Store) UpdateAlias(ctx context.Context, a *Alias, replaceTargets bool) 
 	}
 	defer tx.Rollback()
 	res, err := tx.ExecContext(ctx, `UPDATE aliases SET name = ?, enabled = ?, description = ?, ttft_timeout_ms = ?,
-		idle_timeout_ms = ?, max_duration_ms = ?, fallback_on_ttft_timeout = ?, params_json = ?, updated_at = ?
-		WHERE id = ?`, a.Name, boolInt(a.Enabled), a.Description, durMs(a.TTFTTimeout), durMs(a.IdleTimeout),
-		durMs(a.MaxDuration), fallbackArg(a.FallbackOnTTFTTimeout), params(a), time.Now().UnixMilli(), a.ID)
+		idle_timeout_ms = ?, max_duration_ms = ?, fallback_on_ttft_timeout = ?, params_json = ?, model_info_json = ?,
+		updated_at = ? WHERE id = ?`, a.Name, boolInt(a.Enabled), a.Description, durMs(a.TTFTTimeout), durMs(a.IdleTimeout),
+		durMs(a.MaxDuration), fallbackArg(a.FallbackOnTTFTTimeout), params(a), a.ModelInfo.encode(), time.Now().UnixMilli(), a.ID)
 	if err != nil {
 		return classify(err)
 	}

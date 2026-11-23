@@ -62,10 +62,32 @@ type Alias struct {
 	MaxDuration           *time.Duration
 	FallbackOnTTFTTimeout *bool
 	Params                json.RawMessage
+	ModelInfo             ModelInfo // manual metadata overrides for /api/v1/models
 	CreatedAt             time.Time
 	// Targets are ordered by priority. Only targets whose provider is enabled
 	// are included by ResolveAlias.
 	Targets []Target
+}
+
+// ModelInfo overrides the model metadata that llmgw reports in the LM Studio
+// compatible model list. A nil field means "detect from the upstream".
+type ModelInfo struct {
+	ContextLength *int  `json:"context_length,omitempty"`
+	Tools         *bool `json:"tools,omitempty"`
+	Vision        *bool `json:"vision,omitempty"`
+}
+
+// IsZero reports whether no override is set.
+func (m ModelInfo) IsZero() bool {
+	return m.ContextLength == nil && m.Tools == nil && m.Vision == nil
+}
+
+func (m ModelInfo) encode() string {
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
 }
 
 // Target is one upstream for an alias.
@@ -103,7 +125,7 @@ func CandidateNames(name string) []string {
 }
 
 const aliasCols = `id, name, enabled, description, ttft_timeout_ms, idle_timeout_ms,
-	max_duration_ms, fallback_on_ttft_timeout, params_json, created_at`
+	max_duration_ms, fallback_on_ttft_timeout, params_json, model_info_json, created_at`
 
 // ResolveAlias finds an enabled alias by public name and loads its targets with
 // enabled providers. It returns ErrNotFound for unknown or disabled aliases.
@@ -164,10 +186,11 @@ func scanAlias(r scanner) (*Alias, error) {
 		ttft, idle, maxd sql.NullInt64
 		fallback         sql.NullInt64
 		params           string
+		modelInfo        string
 		createdAt        int64
 	)
 	if err := r.Scan(&a.ID, &a.Name, &enabled, &a.Description, &ttft, &idle, &maxd,
-		&fallback, &params, &createdAt); err != nil {
+		&fallback, &params, &modelInfo, &createdAt); err != nil {
 		return nil, err
 	}
 	a.Enabled = enabled != 0
@@ -179,6 +202,7 @@ func scanAlias(r scanner) (*Alias, error) {
 		a.FallbackOnTTFTTimeout = &b
 	}
 	a.Params = json.RawMessage(params)
+	_ = json.Unmarshal([]byte(modelInfo), &a.ModelInfo) // invalid JSON = no overrides
 	a.CreatedAt = time.UnixMilli(createdAt)
 	return &a, nil
 }

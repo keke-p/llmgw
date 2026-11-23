@@ -135,6 +135,26 @@ client.chat(model="qwen3", messages=[{"role": "user", "content": "hi"}])
 
 `ollama` CLI は認証ヘッダを送れないため、使えません。
 
+### OpenCode（モデル一覧の自動取得）
+
+プロバイダーキーを `lmstudio` にすると、OpenCode は LM Studio 形式の `GET /api/v1/models` からモデル一覧を取得します。llmgw はこのエンドポイントを実装しているので、`models` を書かなくてもエイリアスが一覧に出ます。推論は通常の OpenAI互換API（`/v1/chat/completions`）で行います。
+
+```json
+"provider": {
+  "lmstudio": {
+    "npm": "@ai-sdk/openai-compatible",
+    "options": { "baseURL": "https://llm.example.com/v1", "apiKey": "sk-gw-..." }
+  }
+}
+```
+
+- OpenCode は `baseURL` の末尾の `/v1` を `/api/v1/models` に置き換えて取得します。リバースプロキシでパスを絞っている場合は `/api/v1/` も llmgw に通してください。
+- 返すのはキーで使える有効なエイリアスです。コンテキスト長・ツール呼び出し・vision は、ターゲットの先頭が Ollama なら `/api/show`（と `/api/ps`）から、LM Studio なら上流の `/api/v1/models` から判定します。
+  - Ollama のコンテキスト長は、エイリアスのパラメータの `num_ctx` → Modelfile の `num_ctx` → 実行中のモデルの値（`OLLAMA_CONTEXT_LENGTH` が反映される。一度見た値は記憶する）→ 学習時の最大長、の順に決めます。
+  - それ以外の OpenAI互換の上流では、コンテキスト長は未設定、ツール呼び出しはありとして返します。
+- 判定が合わないときは、管理画面のエイリアス編集の「モデル情報」で、コンテキスト長・ツール呼び出し・vision を上書きできます。
+- OpenCode 上のプロバイダ表示名は「LM Studio」になります。
+
 ---
 
 ## タイムアウトの考え方と経路上の整合
@@ -211,6 +231,7 @@ labels:
           readTimeout: 300s
   ```
 - Traefik は SSE をバッファしないので、ストリーミングのための追加設定は要りません。
+- `Host()` だけで振り分けていれば、`/v1/*` も `/api/*`（Ollama API と LM Studio 互換のモデル一覧 `/api/v1/models`）も llmgw に届きます。``PathPrefix(`/v1`)`` などでパスを絞っている場合は、`/api` も同じサービスに向けてください。
 
 ---
 
@@ -330,6 +351,7 @@ docker compose exec llmgw llmgw reset-admin-password
 | OpenAI互換 | `POST /v1/chat/completions`、`POST /v1/completions`、`POST /v1/embeddings`、`GET /v1/models`（`/v1` 無しでも可） |
 | Ollama | `POST /api/chat`、`/api/generate`、`/api/embed`、`/api/embeddings`、`GET /api/tags`、`POST /api/show`、`GET /api/ps`、`GET /api/version`。モデル管理系（pull/push/create/copy/delete/blobs）は常に 403 |
 | Anthropic互換 | `POST /v1/messages`、`POST /v1/messages/count_tokens` |
+| LM Studio互換 | `GET /api/v1/models`（モデル一覧のみ。OpenCode の `lmstudio` プロバイダ向け） |
 | 管理 | `/admin/`（画面）、`/admin/api/...`（REST） |
 | その他 | `GET /healthz`、`GET /`（`Ollama is running`） |
 

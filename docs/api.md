@@ -29,6 +29,20 @@
 | `count_tokens` | 上流が数えられればその値、そうでなければ文字数からの概算を返します |
 | 無視するフィールド | `cache_control`、`metadata`、サーバーツール（`web_search` など）、`service_tier` など |
 
+### LM Studio互換のモデル一覧（`GET /api/v1/models`）
+
+キーで使える有効なエイリアスを、LM Studio の REST API と同じ形で返します。推論には使わず、一覧の取得専用です（OpenCode の `lmstudio` プロバイダ向け）。キーがない・無効なら 401（OpenAI 形式のエラー）を返します。
+
+```json
+{"models": [{"type": "llm", "key": "qwen3", "display_name": "qwen3", "architecture": "qwen3",
+  "loaded_instances": [], "max_context_length": 32768,
+  "capabilities": {"vision": false, "trained_for_tool_use": true}}]}
+```
+
+- `key` はエイリアス名です。`loaded_instances` は常に配列、`max_context_length` は常に整数か `null`、`type` は `llm` か `embedding` です（`decision` は返しません）。
+- ターゲットの先頭が Ollama なら `/api/show` と `/api/ps` から、LM Studio なら上流の `/api/v1/models` の該当エントリから値を作ります（LM Studio のエントリは `key` だけ書き換えてほぼそのまま返します）。上流の情報は数十秒〜5分キャッシュします。
+- エイリアスの `model_info` で上書きできます（下記）。
+
 ## 管理API（`/admin/api`）
 
 ログインすると、HttpOnly の Cookie（`llmgw_session`、SameSite=Strict、Path=/admin）と CSRF トークンが返ります。GET 以外のリクエストには `X-CSRF-Token` ヘッダが必要です。別サイトからのリクエスト（Origin や Sec-Fetch-Site で判定）は拒否します。
@@ -49,7 +63,7 @@ curl -s "${H[@]}" $B/admin/api/keys -d '{"name":"open-webui","allowed_aliases":[
 | `POST /keys/{id}/disable`、`/enable` | 無効化と有効化 |
 | `GET/POST /providers`、`GET/PATCH/DELETE /providers/{id}` | プロバイダ。`api_key` は書き込み専用で、`null` を送ると削除。エイリアスが使っているプロバイダの削除は 409 |
 | `POST /providers/{id}/test` | 疎通確認。`{"apply_anthropic": true}` を送ると、検出した Anthropic 互換かどうかを設定に反映する |
-| `GET/POST /aliases`、`GET/PATCH/DELETE /aliases/{id}` | エイリアス。`targets` は配列の順が優先順。`effective` に実効タイムアウトと継承元が入る |
+| `GET/POST /aliases`、`GET/PATCH/DELETE /aliases/{id}` | エイリアス。`targets` は配列の順が優先順。`effective` に実効タイムアウトと継承元が入る。`model_info`（`{"context_length": 正の整数, "tools": bool, "vision": bool}`、各キーは `null` か省略で自動判定）は `/api/v1/models` で返す値の上書き |
 | `GET/PATCH /settings` | 設定。時間は ms で指定する |
 | `GET /logs`、`GET /logs/{id}`、`GET /logs/export` | ログ。絞り込みは `from`、`to`、`key_id`、`alias`、`status`（`200`/`4xx`/`5xx`/`error`）、`q`、`limit`、`before_id` |
 | `GET /audit-logs?limit=&before_id=` | 監査ログ |

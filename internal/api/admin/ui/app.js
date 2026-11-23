@@ -412,7 +412,7 @@ function jsonArea(value, rows = 4) {
 
 async function editAlias(a, providers) {
   const isNew = !a;
-  a = a || { name: '', description: '', enabled: true, targets: [], params: {}, fallback_on_ttft_timeout: null, effective: [] };
+  a = a || { name: '', description: '', enabled: true, targets: [], params: {}, model_info: {}, fallback_on_ttft_timeout: null, effective: [] };
   const name = h('input', { value: a.name, class: 'mono', placeholder: '例: qwen3-coder / claude-sonnet-4-5' });
   const desc = h('input', { value: a.description });
   const enabled = h('input', { type: 'checkbox', checked: a.enabled });
@@ -453,6 +453,13 @@ async function editAlias(a, providers) {
   const spMode = h('select', {}, [['', 'なし'], ['prepend', '先頭に追加'], ['replace', '置換']].map(([v, l]) =>
     h('option', { value: v, selected: ((params.system_prompt || {}).mode || '') === v ? 'selected' : null }, l)));
   const spText = h('textarea', { rows: 3 }, (params.system_prompt || {}).text || '');
+  const mi = a.model_info || {};
+  const miCtx = h('input', { type: 'number', min: 1, step: 1, value: mi.context_length ?? '', placeholder: '自動' });
+  const triSelect = (v) => h('select', {}, [['', '自動'], ['true', 'あり'], ['false', 'なし']].map(([x, l]) =>
+    h('option', { value: x, selected: String(v ?? '') === x ? 'selected' : null }, l)));
+  const miTools = triSelect(mi.tools);
+  const miVision = triSelect(mi.vision);
+  const triValue = (sel) => (sel.value === '' ? null : sel.value === 'true');
   const body = h('div', {}, datalists,
     h('div', { class: 'grid2' }, field('公開モデル名', name, 'コロン可（name:tag）。Ollama クライアントからは :latest 省略可'), field('説明', desc)),
     h('label', { class: 'check mb12' }, enabled, '有効'),
@@ -465,7 +472,12 @@ async function editAlias(a, providers) {
     h('div', { class: 'grid2' },
       field('defaults（未指定時のみ適用・JSON）', defaults, '例: {"temperature": 0.7}'),
       field('overrides（常に強制・JSON）', overrides, '例: {"num_ctx": 32768, "keep_alive": "30m", "max_tokens": 4096}')),
-    h('div', { class: 'grid2' }, field('システムプロンプト', spMode), field('システムプロンプト本文', spText)));
+    h('div', { class: 'grid2' }, field('システムプロンプト', spMode), field('システムプロンプト本文', spText)),
+    h('h2', {}, 'モデル情報（LM Studio互換の /api/v1/models で返す値の上書き）'),
+    h('div', { class: 'grid2' },
+      field('コンテキスト長（トークン）', miCtx, '空欄なら自動（Ollama: エイリアス／Modelfile の num_ctx → 実行中の値 → 学習時の最大長）'),
+      field('ツール呼び出し', miTools, '自動: Ollama は capabilities、LM Studio は trained_for_tool_use から判定'),
+      field('画像入力（vision）', miVision)));
   const payload = () => {
     const p = {};
     const d = defaults.getValue(); if (d !== undefined) p.defaults = d;
@@ -475,7 +487,9 @@ async function editAlias(a, providers) {
       targets: [...list.children].map((r) => r.getValue()),
       ttft_timeout_ms: secToMs(to.ttft_timeout_ms.value), idle_timeout_ms: secToMs(to.idle_timeout_ms.value),
       max_duration_ms: secToMs(to.max_duration_ms.value),
-      fallback_on_ttft_timeout: fb.value === '' ? null : fb.value === 'true', params: p };
+      fallback_on_ttft_timeout: fb.value === '' ? null : fb.value === 'true', params: p,
+      model_info: { context_length: miCtx.value.trim() === '' ? null : parseInt(miCtx.value, 10),
+        tools: triValue(miTools), vision: triValue(miVision) } };
   };
   const res = await modal(isNew ? 'エイリアスを追加' : `エイリアスを編集: ${a.name}`, body, [
     { label: 'キャンセル' },

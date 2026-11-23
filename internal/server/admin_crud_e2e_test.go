@@ -97,7 +97,8 @@ func TestAdminAliases(t *testing.T) {
 	p2 := itoa(int64(o2["provider"].(map[string]any)["id"].(float64)))
 
 	resp, al := a.do("POST", "/admin/api/aliases", `{"name":"coder","description":"d","targets":[{"provider_id":`+p1+`,"upstream_model":"qwen3:8b"},{"provider_id":`+p2+`,"upstream_model":"llama3"}],
-		"ttft_timeout_ms":900000,"fallback_on_ttft_timeout":true,"params":{"overrides":{"num_ctx":32768},"system_prompt":{"mode":"prepend","text":"be nice"}}}`)
+		"ttft_timeout_ms":900000,"fallback_on_ttft_timeout":true,"params":{"overrides":{"num_ctx":32768},"system_prompt":{"mode":"prepend","text":"be nice"}},
+		"model_info":{"context_length":65536,"tools":true,"vision":null}}`)
 	if resp.StatusCode != 201 {
 		t.Fatalf("create: %d %v", resp.StatusCode, al)
 	}
@@ -115,6 +116,9 @@ func TestAdminAliases(t *testing.T) {
 		"no targets":   `{"name":"x","targets":[]}`,
 		"bad provider": `{"name":"x","targets":[{"provider_id":999,"upstream_model":"m"}]}`,
 		"space name":   `{"name":"a b","targets":[{"provider_id":` + p1 + `,"upstream_model":"m"}]}`,
+		"bad ctx":      `{"name":"x","targets":[{"provider_id":` + p1 + `,"upstream_model":"m"}],"model_info":{"context_length":1.5}}`,
+		"bad tools":    `{"name":"x","targets":[{"provider_id":` + p1 + `,"upstream_model":"m"}],"model_info":{"tools":"yes"}}`,
+		"bad mi key":   `{"name":"x","targets":[{"provider_id":` + p1 + `,"upstream_model":"m"}],"model_info":{"ctx":1}}`,
 	} {
 		if resp, _ := a.do("POST", "/admin/api/aliases", body); resp.StatusCode != 400 {
 			t.Errorf("%s: %d", name, resp.StatusCode)
@@ -140,6 +144,9 @@ func TestAdminAliases(t *testing.T) {
 	_, got := a.do("GET", "/admin/api/aliases/"+id, "")
 	if got["params"].(map[string]any)["overrides"] == nil || got["description"] != "d" || len(got["targets"].([]any)) != 1 {
 		t.Errorf("patch must keep other fields: %v", got)
+	}
+	if mi := got["model_info"].(map[string]any); mi["context_length"] != 65536.0 || mi["tools"] != true || mi["vision"] != nil {
+		t.Errorf("model_info = %v", mi)
 	}
 	if resp, _ := a.do("DELETE", "/admin/api/aliases/"+id, ""); resp.StatusCode != 204 {
 		t.Errorf("delete: %d", resp.StatusCode)

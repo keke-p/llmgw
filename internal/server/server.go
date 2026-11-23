@@ -14,6 +14,7 @@ import (
 
 	"llmgw/internal/api/admin"
 	"llmgw/internal/api/anthropic"
+	"llmgw/internal/api/lmstudio"
 	"llmgw/internal/api/ollama"
 	"llmgw/internal/api/openai"
 	"llmgw/internal/clock"
@@ -131,6 +132,11 @@ func (s *Server) routes() {
 		ClientIP:     func(r *http.Request) string { return clientIP(r, s.cfg.TrustedProxies) },
 	}
 	an.Register(s.mux)
+
+	// LM Studio compatible model list (model discovery only; inference uses
+	// the OpenAI compatible API).
+	lm := &lmstudio.Handler{Engine: s.engine, Auth: s.authenticate}
+	lm.Register(s.mux)
 
 	ad := &admin.API{
 		Store:        s.store,

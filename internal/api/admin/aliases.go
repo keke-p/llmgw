@@ -51,6 +51,7 @@ type aliasJSON struct {
 	MaxDurationMS         *int64          `json:"max_duration_ms"`
 	FallbackOnTTFTTimeout *bool           `json:"fallback_on_ttft_timeout"`
 	Params                json.RawMessage `json:"params"`
+	ModelInfo             store.ModelInfo `json:"model_info"`
 	Effective             []effectiveJSON `json:"effective"`
 	CreatedAt             time.Time       `json:"created_at"`
 }
@@ -59,7 +60,7 @@ func aliasToJSON(al *store.Alias, s store.Settings) aliasJSON {
 	j := aliasJSON{ID: al.ID, Name: al.Name, Description: al.Description, Enabled: al.Enabled,
 		Targets: []targetJSON{}, TTFTTimeoutMS: msOrNil(al.TTFTTimeout), IdleTimeoutMS: msOrNil(al.IdleTimeout),
 		MaxDurationMS: msOrNil(al.MaxDuration), FallbackOnTTFTTimeout: al.FallbackOnTTFTTimeout,
-		Params: al.Params, Effective: []effectiveJSON{}, CreatedAt: al.CreatedAt.UTC()}
+		Params: al.Params, ModelInfo: al.ModelInfo, Effective: []effectiveJSON{}, CreatedAt: al.CreatedAt.UTC()}
 	if len(j.Params) == 0 {
 		j.Params = json.RawMessage("{}")
 	}
@@ -111,6 +112,47 @@ func (a *API) getAlias(w http.ResponseWriter, r *http.Request, _ *actor) {
 var aliasFields = map[string]bool{
 	"name": true, "description": true, "enabled": true, "targets": true, "ttft_timeout_ms": true,
 	"idle_timeout_ms": true, "max_duration_ms": true, "fallback_on_ttft_timeout": true, "params": true,
+	"model_info": true,
+}
+
+// ValidateModelInfo checks the alias model metadata overrides:
+// {"context_length": positive integer | null, "tools": bool | null, "vision": bool | null}.
+// A null or missing key means "detect from the upstream".
+func ValidateModelInfo(raw json.RawMessage) (store.ModelInfo, error) {
+	var mi store.ModelInfo
+	if isNull(raw) || len(raw) == 0 {
+		return mi, nil
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return mi, errors.New("model_info must be an object")
+	}
+	for k, v := range m {
+		if isNull(v) {
+			continue
+		}
+		switch k {
+		case "context_length":
+			var n int
+			if err := json.Unmarshal(v, &n); err != nil || n <= 0 {
+				return mi, errors.New("model_info.context_length must be a positive integer or null")
+			}
+			mi.ContextLength = &n
+		case "tools", "vision":
+			var b bool
+			if err := json.Unmarshal(v, &b); err != nil {
+				return mi, errors.New("model_info." + k + " must be a boolean or null")
+			}
+			if k == "tools" {
+				mi.Tools = &b
+			} else {
+				mi.Vision = &b
+			}
+		default:
+			return mi, errors.New("unknown model_info key " + strconv.Quote(k) + " (use context_length, tools, vision)")
+		}
+	}
+	return mi, nil
 }
 
 // ValidateParams checks the alias parameter rules:
@@ -202,6 +244,12 @@ func (a *API) applyAliasInput(r *http.Request, al *store.Alias, raw map[string]j
 				return false, nil, err
 			}
 			al.Params = p
+		case "model_info":
+			mi, err := ValidateModelInfo(v)
+			if err != nil {
+				return false, nil, err
+			}
+			al.ModelInfo = mi
 		case "targets":
 			var ts []struct {
 				ProviderID    int64  `json:"provider_id"`
