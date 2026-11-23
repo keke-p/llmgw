@@ -101,7 +101,15 @@ function modal(title, body, buttons, opts = {}) {
     const box = h('div', { class: 'modal' + (opts.wide ? ' wide' : '') },
       h('header', {}, h('span', {}, title), h('button', { class: 'link', onclick: () => close(undefined) }, '✕')),
       h('div', { class: 'body' }, body), footer);
-    const backdrop = h('div', { class: 'modal-backdrop', onclick: (e) => { if (e.target === backdrop) close(undefined); } }, box);
+    // Close only when both mousedown and mouseup happen on the backdrop itself.
+    // Otherwise a text-selection drag that starts inside the dialog and ends
+    // outside it would fire a click on the backdrop and discard the input.
+    let downOnBackdrop = false;
+    const backdrop = h('div', {
+      class: 'modal-backdrop',
+      onmousedown: (e) => { downOnBackdrop = e.target === backdrop; },
+      onclick: (e) => { if (downOnBackdrop && e.target === backdrop) close(undefined); downOnBackdrop = false; },
+    }, box);
     document.addEventListener('keydown', onKey);
     root.append(backdrop);
     const first = box.querySelector('input,select,textarea'); if (first) first.focus();
