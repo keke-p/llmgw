@@ -129,8 +129,10 @@ function route(name, fn) { routes[name] = fn; }
 async function render() {
   const [name, ...rest] = (location.hash.replace(/^#\/?/, '') || 'dashboard').split('/');
   const main = document.getElementById('main');
-  document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === name));
+  const navName = name === 'ollama' ? 'providers' : name;
+  document.querySelectorAll('#nav a').forEach((a) => a.classList.toggle('active', a.dataset.route === navName));
   const fn = routes[name] || routes.dashboard;
+  ollamaPage = null;
   main.replaceChildren(h('p', { class: 'muted' }, '読み込み中…'));
   try {
     const view = await fn(...rest);
@@ -297,6 +299,7 @@ route('providers', async () => {
     h('td', {}, p.models.length),
     h('td', { class: 'small' }, p.aliases.join(', ') || '—'),
     h('td', { class: 'actions' },
+      p.type === 'ollama' ? [h('a', { class: 'btn small', href: `#/ollama/${p.id}` }, 'モデル管理'), ' '] : null,
       h('button', { class: 'small', onclick: () => testProvider(p) }, '疎通確認'), ' ',
       h('button', { class: 'small', onclick: () => editProvider(p) }, '編集'), ' ',
       h('button', { class: 'small danger', onclick: async () => {
@@ -383,6 +386,309 @@ async function testProvider(p) {
     c.models.length ? h('pre', {}, c.models.join('\n')) : h('p', { class: 'muted' }, 'なし')));
   render();
 }
+
+// ---------------------------------------------------- ollama model management
+
+const fmtBytes = (n) => {
+  if (n === null || n === undefined) return '—';
+  const u = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return (i ? n.toFixed(1) : n) + ' ' + u[i];
+};
+// Ollama treats "name" as "name:latest".
+const withLatest = (m) => (/:[^/]*$/.test(m) ? m : m + ':latest');
+
+// streamOp POSTs to a streaming (NDJSON) admin endpoint and calls onLine for
+// each progress object. It throws on an {"error"} line or an unfinished stream.
+async function streamOp(path, body, onLine, signal) {
+  const res = await fetch('/admin/api' + path, { method: 'POST', credentials: 'same-origin', signal,
+    headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': state.csrf }, body: JSON.stringify(body) });
+  if (!res.ok) {
+    let msg = res.statusText;
+    try { const d = await res.json(); msg = (d.error && d.error.message) || msg; } catch { /* not JSON */ }
+    if (res.status === 401) showLogin();
+    throw new APIError(res.status, msg);
+  }
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '', last = null;
+  const handle = (line) => {
+    line = line.trim(); if (!line) return;
+    let o; try { o = JSON.parse(line); } catch { return; }
+    if (o.error) throw new Error(o.error);
+    last = o; onLine(o);
+  };
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) { handle(buf.slice(0, i)); buf = buf.slice(i + 1); }
+  }
+  handle(buf);
+  if (!last || last.status !== 'success') throw new Error('処理が完了する前に応答が終了しました');
+}
+
+// progressView shows Ollama progress lines ({status, digest, total, completed}).
+function progressView() {
+  const status = h('div', { class: 'small' }, '開始しています…');
+  const bar = h('progress', { class: 'wfull', max: 1, value: 0 });
+  const detail = h('div', { class: 'small muted' });
+  bar.hidden = true;
+  let sample = null; // {digest, t, c} for the transfer rate
+  const el = h('div', { class: 'progress-box' }, status, bar, detail);
+  el.update = (o) => {
+    status.textContent = o.status || '';
+    if (o.total) {
+      const c = o.completed || 0, now = Date.now();
+      bar.hidden = false; bar.max = o.total; bar.value = c;
+      let rate = '';
+      if (sample && sample.digest === o.digest && now - sample.t >= 1000) {
+        rate = ` · ${fmtBytes(Math.max(0, (c - sample.c) / ((now - sample.t) / 1000)))}/s`;
+        sample = { digest: o.digest, t: now, c, rate };
+      } else if (!sample || sample.digest !== o.digest) {
+        sample = { digest: o.digest, t: now, c, rate: '' };
+      } else rate = sample.rate;
+      detail.textContent = `${fmtBytes(c)} / ${fmtBytes(o.total)}（${Math.floor((c / o.total) * 100)}%）${rate}`;
+    } else { bar.hidden = true; detail.textContent = ''; }
+  };
+  el.fail = (msg, aborted) => {
+    status.textContent = aborted ? msg : 'エラー: ' + msg; status.className = aborted ? 'small muted' : 'small err-text';
+    bar.hidden = true; detail.textContent = '';
+  };
+  return el;
+}
+
+// Pull jobs outlive the page view, so navigating away and back keeps progress.
+const ollamaJobs = [];
+let ollamaPage = null; // {pid, drawJobs, reload} while the page is shown
+
+window.addEventListener('beforeunload', (e) => {
+  if (ollamaJobs.some((j) => !j.done)) { e.preventDefault(); e.returnValue = ''; }
+});
+
+function startPull(pid, model) {
+  if (ollamaJobs.some((j) => j.pid === pid && j.model === model && !j.done)) { toast(`${model} は取得中です`, true); return; }
+  const job = { pid, model, done: false, error: '', abort: new AbortController(), view: progressView() };
+  ollamaJobs.unshift(job);
+  const redraw = () => { if (ollamaPage && ollamaPage.pid === pid) ollamaPage.drawJobs(); };
+  redraw();
+  streamOp(`/providers/${pid}/ollama/pull`, { model }, (o) => job.view.update(o), job.abort.signal)
+    .then(() => {
+      job.view.update({ status: '完了' });
+      toast(`${model} を取得しました`);
+      if (ollamaPage && ollamaPage.pid === pid) ollamaPage.reload();
+    })
+    .catch((e) => {
+      const aborted = e.name === 'AbortError';
+      job.error = aborted ? '中止しました' : e.message;
+      job.view.fail(job.error, aborted);
+      if (e.name !== 'AbortError') toast(`${model} の取得に失敗: ${e.message}`, true);
+    })
+    .finally(() => { job.done = true; redraw(); });
+}
+
+// parseShowParameters turns /api/show "parameters" text into an object.
+function parseShowParameters(text) {
+  const out = {};
+  for (const line of (text || '').split('\n')) {
+    const m = line.trim().match(/^(\S+)\s+(.*)$/);
+    if (!m) continue;
+    let v = m[2].trim();
+    if (/^".*"$/.test(v)) { try { v = JSON.parse(v); } catch { v = v.slice(1, -1); } }
+    else if (v !== '' && !isNaN(Number(v))) v = Number(v);
+    else if (v === 'true' || v === 'false') v = v === 'true';
+    if (m[1] === 'stop') (out.stop = out.stop || []).push(v);
+    else out[m[1]] = v;
+  }
+  return out;
+}
+
+route('ollama', async (idParam) => {
+  const pid = parseInt(idParam, 10);
+  const [p, aliases] = await Promise.all([api('GET', `/providers/${pid}`), api('GET', '/aliases')]);
+  if (p.type !== 'ollama') throw new Error('Ollama のプロバイダではありません');
+
+  // Aliases that target a model of this provider, keyed by full model name.
+  const usedBy = {};
+  for (const a of aliases.data) for (const t of a.targets) {
+    if (t.provider_id === pid) (usedBy[withLatest(t.upstream_model)] = usedBy[withLatest(t.upstream_model)] || []).push(a.name);
+  }
+
+  let models = [];
+  const tableBox = h('div', {});
+  const filter = h('input', { placeholder: 'モデル名で絞り込み', type: 'search' });
+  const jobsBox = h('div', {});
+
+  const drawJobs = () => {
+    const jobs = ollamaJobs.filter((j) => j.pid === pid);
+    jobsBox.replaceChildren(...jobs.map((j) => h('div', { class: 'job' },
+      h('div', { class: 'row' }, h('strong', { class: 'mono grow' }, j.model),
+        j.done
+          ? h('button', { class: 'small', onclick: () => { ollamaJobs.splice(ollamaJobs.indexOf(j), 1); drawJobs(); } }, '閉じる')
+          : h('button', { class: 'small danger', onclick: () => j.abort.abort() }, '中止')),
+      j.view)));
+  };
+
+  const drawTable = () => {
+    const q = filter.value.trim().toLowerCase();
+    const rows = models.filter((m) => !q || m.name.toLowerCase().includes(q)).map((m) => {
+      const d = m.details || {};
+      const users = usedBy[m.name] || [];
+      return h('tr', {},
+        h('td', {}, h('strong', { class: 'mono' }, m.name), d.family ? h('div', { class: 'small muted' }, d.family) : null),
+        h('td', { class: 'small' }, fmtBytes(m.size)),
+        h('td', { class: 'small' }, d.parameter_size || '—'),
+        h('td', { class: 'small' }, d.quantization_level || '—'),
+        h('td', { class: 'small' }, fmtTime(m.modified_at)),
+        h('td', { class: 'small' }, m.loaded ? [badge('ロード中', 'ok'), h('div', { class: 'muted' },
+          'VRAM ' + fmtBytes(m.loaded.size_vram), m.loaded.expires_at ? ' · 〜' + fmtTime(m.loaded.expires_at) : '')] : h('span', { class: 'muted' }, '—')),
+        h('td', { class: 'small' }, users.length ? users.join(', ') : h('span', { class: 'muted' }, '—')),
+        h('td', { class: 'actions' },
+          h('button', { class: 'small', onclick: () => showModel(m.name) }, '詳細'), ' ',
+          h('button', { class: 'small', onclick: () => deriveModel(m.name) }, '派生'), ' ',
+          h('button', { class: 'small', onclick: () => copyModel(m.name) }, 'コピー'), ' ',
+          m.loaded ? [h('button', { class: 'small', onclick: () => guard(async () => {
+            await api('POST', `/providers/${pid}/ollama/unload`, { model: m.name }); toast('アンロードしました'); reload();
+          }) }, 'アンロード'), ' '] : null,
+          h('button', { class: 'small danger', onclick: () => deleteModel(m.name, users) }, '削除')));
+    });
+    tableBox.replaceChildren(h('table', {},
+      h('thead', {}, h('tr', {}, ['モデル', 'サイズ', 'パラメータ', '量子化', '更新日時', 'メモリ', '使用エイリアス', ''].map((t) => h('th', {}, t)))),
+      h('tbody', {}, rows.length ? rows : h('tr', {}, h('td', { colspan: 8, class: 'muted' }, models.length ? '該当なし' : 'モデルがありません')))));
+  };
+  filter.addEventListener('input', drawTable);
+
+  const reload = async () => {
+    const res = await guard(() => api('GET', `/providers/${pid}/ollama/models`));
+    if (!res) { tableBox.replaceChildren(h('p', { class: 'err-text' }, 'モデル一覧を取得できませんでした')); return; }
+    models = res.data.sort((a, b) => a.name.localeCompare(b.name));
+    drawTable();
+  };
+
+  const showModel = async (name) => {
+    const s = await guard(() => api('GET', `/providers/${pid}/ollama/show?model=${encodeURIComponent(name)}`));
+    if (!s) return;
+    const d = s.details || {};
+    const info = s.model_info || {};
+    const ctxKey = Object.keys(info).find((k) => k.endsWith('.context_length'));
+    const sec = (title, text) => text ? [h('h2', {}, title), h('pre', {}, text)] : null;
+    await modal(`モデル: ${name}`, h('div', {},
+      h('dl', { class: 'kv' },
+        h('dt', {}, 'ファミリー'), h('dd', {}, d.family || '—'),
+        h('dt', {}, 'パラメータ数'), h('dd', {}, d.parameter_size || '—'),
+        h('dt', {}, '量子化'), h('dd', {}, d.quantization_level || '—'),
+        h('dt', {}, '形式'), h('dd', {}, d.format || '—'),
+        h('dt', {}, '学習時の最大コンテキスト'), h('dd', {}, ctxKey ? String(info[ctxKey]) : '—'),
+        h('dt', {}, '機能'), h('dd', {}, (s.capabilities || []).length ? s.capabilities.map((c) => [badge(c), ' ']) : '—'),
+        h('dt', {}, '使用エイリアス'), h('dd', {}, (usedBy[name] || []).join(', ') || '—')),
+      sec('パラメータ', s.parameters), sec('システムプロンプト', s.system), sec('テンプレート', s.template),
+      s.license ? h('details', {}, h('summary', {}, 'ライセンス'), h('pre', {}, s.license)) : null,
+      s.modelfile ? h('details', {}, h('summary', {}, 'Modelfile'), h('pre', {}, s.modelfile)) : null), null, { wide: true });
+  };
+
+  const copyModel = async (name) => {
+    const dest = h('input', { class: 'mono wfull', value: name.replace(/:[^/:]*$/, '') + '-copy' });
+    const res = await modal(`コピー: ${name}`, field('コピー先のモデル名', dest, 'ディスク上のデータは共有されるため、追加の容量はほとんど使いません'),
+      [{ label: 'キャンセル' }, { label: 'コピー', class: 'primary', action: () => guard(async () => {
+        await api('POST', `/providers/${pid}/ollama/copy`, { source: name, destination: dest.value.trim() }); return true;
+      }) || false }]);
+    if (res) { toast('コピーしました'); reload(); }
+  };
+
+  const deleteModel = async (name, users) => {
+    const msg = h('div', {}, h('p', {}, `モデル「${name}」を Ollama から削除します。元に戻せません（再度 pull が必要です）。`),
+      users.length ? h('p', { class: 'warn-text' }, `このモデルはエイリアス ${users.join(', ')} のターゲットです。削除するとそれらのエイリアスは失敗するようになります。`) : null);
+    const ok = await modal('確認', msg, [{ label: 'キャンセル', value: false }, { label: '削除', value: true, class: 'danger' }]);
+    if (!ok) return;
+    if (await guard(() => api('DELETE', `/providers/${pid}/ollama/models?model=${encodeURIComponent(name)}`)) !== undefined) {
+      toast('削除しました'); reload();
+    }
+  };
+
+  const deriveModel = async (base) => {
+    const s = await guard(() => api('GET', `/providers/${pid}/ollama/show?model=${encodeURIComponent(base)}`));
+    if (!s) return;
+    createModel({ from: base, name: base.replace(/:[^/:]*$/, '') + '-custom', system: s.system || '', parameters: parseShowParameters(s.parameters) });
+  };
+
+  const createModel = async (init = {}) => {
+    const name = h('input', { class: 'mono', value: init.name || '', placeholder: '例: qwen3-coder-32k' });
+    const modeSel = h('select', {}, h('option', { value: 'form' }, 'フォーム'), h('option', { value: 'modelfile' }, 'Modelfile'));
+    const dl = h('datalist', { id: 'ollama-local-models' }, models.map((m) => h('option', { value: m.name })));
+    const from = h('input', { class: 'mono', list: 'ollama-local-models', value: init.from || '', placeholder: 'ベースモデル（例: qwen3:8b）' });
+    const system = h('textarea', { rows: 4, placeholder: '空欄ならベースモデルの設定を継承' }, init.system || '');
+    const params = h('textarea', { rows: 5, placeholder: '{"num_ctx": 32768, "temperature": 0.7}' },
+      init.parameters && Object.keys(init.parameters).length ? JSON.stringify(init.parameters, null, 2) : '');
+    const template = h('textarea', { rows: 4, placeholder: '空欄ならベースモデルのテンプレートを継承' });
+    const quant = h('select', {}, [['', 'しない'], ['q4_K_M', 'q4_K_M'], ['q4_K_S', 'q4_K_S'], ['q8_0', 'q8_0']].map(([v, l]) => h('option', { value: v }, l)));
+    const mf = h('textarea', { rows: 12, placeholder: 'FROM qwen3:8b\nPARAMETER num_ctx 32768\nSYSTEM """あなたは…"""' });
+    const formBox = h('div', {},
+      field('ベースモデル（FROM）', from, 'ローカルのモデル名。ファイル（GGUF）からの作成には対応していません'),
+      field('システムプロンプト（SYSTEM）', system),
+      field('パラメータ（PARAMETER・JSON）', params, '例: num_ctx, temperature, top_p, top_k, repeat_penalty, stop（配列）'),
+      field('テンプレート（TEMPLATE）', template));
+    const mfBox = h('div', {}, field('Modelfile', mf, '対応: FROM / PARAMETER / SYSTEM / TEMPLATE / MESSAGE / LICENSE（ADAPTER とファイルからの FROM は不可）'));
+    mfBox.hidden = true;
+    modeSel.addEventListener('change', () => { formBox.hidden = modeSel.value !== 'form'; mfBox.hidden = modeSel.value === 'form'; });
+    const progress = h('div', {});
+    let busy = false;
+    const body = h('div', {}, dl,
+      h('div', { class: 'grid2' }, field('新しいモデル名', name, '既存と同じ名前なら上書きされます'), field('入力方法', modeSel)),
+      formBox, mfBox,
+      field('量子化（quantize）', quant, 'FP16/FP32 のモデルから作成するときのみ有効'),
+      progress);
+    const payload = () => {
+      const o = { model: name.value.trim() };
+      if (quant.value) o.quantize = quant.value;
+      if (modeSel.value === 'modelfile') { o.modelfile = mf.value; return o; }
+      o.from = from.value.trim();
+      if (system.value.trim()) o.system = system.value;
+      if (template.value.trim()) o.template = template.value;
+      if (params.value.trim()) {
+        try { o.parameters = JSON.parse(params.value); } catch (e) { throw new Error('パラメータの JSON が不正です: ' + e.message); }
+      }
+      return o;
+    };
+    const res = await modal('モデルを作成', body, [
+      { label: '閉じる' },
+      { label: '作成', class: 'primary', action: async () => {
+        if (busy) return false;
+        let o; try { o = payload(); } catch (e) { toast(e.message, true); return false; }
+        busy = true;
+        const pv = progressView(); progress.replaceChildren(pv);
+        try {
+          await streamOp(`/providers/${pid}/ollama/create`, o, (x) => pv.update(x));
+          return true;
+        } catch (e) { pv.fail(e.message); return false; } finally { busy = false; }
+      } }], { wide: true });
+    if (res) { toast('モデルを作成しました'); reload(); }
+  };
+
+  const pullInput = h('input', { class: 'mono wfull', placeholder: '例: qwen3:8b / gemma3:12b / hf.co/unsloth/Qwen3-8B-GGUF:Q4_K_M' });
+  const pullForm = h('form', { class: 'panel', onsubmit: (e) => {
+    e.preventDefault();
+    const m = pullInput.value.trim(); if (!m) return;
+    startPull(pid, m); pullInput.value = '';
+  } },
+  h('h2', { class: 'mt0' }, 'モデルを取得（pull）'),
+  h('div', { class: 'row' }, h('div', { class: 'grow' }, pullInput), h('button', { class: 'primary', type: 'submit' }, '取得')),
+  h('p', { class: 'muted small' }, 'ollama.com のライブラリ名、または hf.co/… の Hugging Face GGUF を指定します。取得中にブラウザを閉じると中断されます（再実行すると続きから再開します）。',
+    h('a', { href: 'https://ollama.com/library', target: '_blank', rel: 'noopener noreferrer' }, 'ライブラリを見る')),
+  jobsBox);
+
+  ollamaPage = { pid, drawJobs, reload };
+  drawJobs();
+  await reload();
+  return h('div', {},
+    h('h1', {}, h('a', { href: '#/providers', class: 'muted' }, 'プロバイダ'), ' / ', p.name, ' のモデル', h('span', { class: 'spacer' }),
+      h('button', { onclick: () => reload() }, '再読み込み'),
+      h('button', { class: 'primary', onclick: () => createModel() }, '+ モデルを作成')),
+    h('p', { class: 'muted small mono' }, p.base_url),
+    pullForm,
+    h('div', { class: 'row mb12' }, h('div', { class: 'grow' }, filter)),
+    tableBox);
+});
 
 // ---------------------------------------------------------------- aliases
 

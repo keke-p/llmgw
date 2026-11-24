@@ -63,6 +63,13 @@ curl -s "${H[@]}" $B/admin/api/keys -d '{"name":"open-webui","allowed_aliases":[
 | `POST /keys/{id}/disable`、`/enable` | 無効化と有効化 |
 | `GET/POST /providers`、`GET/PATCH/DELETE /providers/{id}` | プロバイダ。`api_key` は書き込み専用で、`null` を送ると削除。エイリアスが使っているプロバイダの削除は 409 |
 | `POST /providers/{id}/test` | 疎通確認。`{"apply_anthropic": true}` を送ると、検出した Anthropic 互換かどうかを設定に反映する |
+| `GET /providers/{id}/ollama/models` | Ollama の `/api/tags` に、ロード中のモデルの情報（`loaded`：`size_vram`、`expires_at`。ロードされていなければ `null`）を加えて返す。種別が `ollama` でないプロバイダは 400 |
+| `GET /providers/{id}/ollama/show?model=` | `/api/show` の結果（`tensors` を除く） |
+| `POST /providers/{id}/ollama/pull` `{model, insecure?}` | モデルを取得する。応答は Ollama の進捗をそのまま流す NDJSON（`{"status","digest","total","completed"}`、最後が `{"status":"success"}`、途中のエラーは `{"error"}` 行）。接続を切ると中断する |
+| `POST /providers/{id}/ollama/create` | モデルを作成する（応答は pull と同じ NDJSON）。`model`、`from`、`system`、`template`、`parameters`、`messages`、`license`、`quantize` を受け付ける。`modelfile`（文字列）を送ると FROM／PARAMETER／SYSTEM／TEMPLATE／MESSAGE／LICENSE を解釈して各項目に変換する（個別に指定した項目が優先）。ファイル・ADAPTER からの作成は 400 |
+| `POST /providers/{id}/ollama/copy` `{source, destination}` | モデルをコピーする（204） |
+| `DELETE /providers/{id}/ollama/models?model=` | モデルを削除する（204。存在しなければ 404） |
+| `POST /providers/{id}/ollama/unload` `{model}` | モデルをメモリから降ろす（`keep_alive: 0`。204） |
 | `GET/POST /aliases`、`GET/PATCH/DELETE /aliases/{id}` | エイリアス。`targets` は配列の順が優先順。`effective` に実効タイムアウトと継承元が入る。`model_info`（`{"context_length": 正の整数, "tools": bool, "vision": bool}`、各キーは `null` か省略で自動判定）は `/api/v1/models` で返す値の上書き |
 | `GET/PATCH /settings` | 設定。時間は ms で指定する |
 | `GET /logs`、`GET /logs/{id}`、`GET /logs/export` | ログ。絞り込みは `from`、`to`、`key_id`、`alias`、`status`（`200`/`4xx`/`5xx`/`error`）、`q`、`limit`、`before_id` |

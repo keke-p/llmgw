@@ -32,6 +32,7 @@ func (a *API) Register(mux *http.ServeMux) {
 	a.registerProviders(mux)
 	a.registerAliases(mux)
 	a.registerSettings(mux)
+	a.registerOllama(mux)
 	a.registerUI(mux)
 	a.registerBackup(mux)
 

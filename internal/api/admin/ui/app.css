@@ -105,3 +105,10 @@ pre { background: var(--code-bg); border: 1px solid var(--border); border-radius
 .mt0 { margin-top: 0; } .mt6 { margin-top: 6px; } .mt8 { margin-top: 8px; } .mt10 { margin-top: 10px; } .mt12 { margin-top: 12px; }
 .mb12 { margin-bottom: 12px; } .mv8 { margin: 8px 0 12px; } .wfull { width: 100%; }
 h1 button, h1 .btn { font-size: 14px; font-weight: 400; }
+/* ollama model management */
+.job { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin-top: 8px; }
+.progress-box { margin-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+progress { height: 8px; accent-color: var(--accent); }
+details { margin-top: 12px; }
+details summary { cursor: pointer; font-weight: 600; margin-bottom: 6px; }
+h1 a { text-decoration: none; }

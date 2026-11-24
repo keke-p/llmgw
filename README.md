@@ -82,7 +82,7 @@ curl http://localhost:4000/v1/chat/completions -H "Authorization: Bearer sk-gw-.
 
 ### Open WebUI
 
-- **Ollama として接続**する場合：管理者設定の「接続」で、Ollama API の URL を `http://llmgw:4000` にし、API キー欄に Virtual Key を入れます。モデル一覧には、そのキーで使えるエイリアスだけが出ます。モデルの pull や削除はゲートウェイが拒否します（403）。
+- **Ollama として接続**する場合：管理者設定の「接続」で、Ollama API の URL を `http://llmgw:4000` にし、API キー欄に Virtual Key を入れます。モデル一覧には、そのキーで使えるエイリアスだけが出ます。モデルの pull や削除はゲートウェイが拒否します（403）。モデルの管理は llmgw の管理画面から行ってください（[Ollama のモデル管理](#ollama-のモデル管理)）。
 - **OpenAI として接続**する場合：URL を `http://llmgw:4000/v1`、キーを Virtual Key にします。環境変数で設定するなら `OPENAI_API_BASE_URL=http://llmgw:4000/v1`、`OPENAI_API_KEY=sk-gw-...` です。
 - 長い生成で途中で切れる場合は、`AIOHTTP_CLIENT_TIMEOUT` を延ばしてください（下の[タイムアウト整合表](#経路上のタイムアウト整合表)を参照）。
 
@@ -256,6 +256,17 @@ labels:
 - `defaults` はクライアントが指定しなかった場合だけ、`overrides` は常に適用します。ただし `overrides.max_tokens` は**上限**として扱います。
 - 共通の名前は `temperature`、`top_p`、`top_k`、`seed`、`max_tokens`、`stop`、`presence_penalty`、`frequency_penalty`、`keep_alive`、`think` です。それ以外（`num_ctx`、`repeat_penalty`、`min_p` など）は Ollama の `options` として扱います。
 - どの形式で受けても適用されます。Anthropic 形式のリクエストに `num_ctx` のような Anthropic で表せない項目を適用する場合は、パススルーではなく変換で送ります。
+
+### Ollama のモデル管理
+
+種別が `ollama` のプロバイダは、管理画面の「プロバイダ」→「モデル管理」で上流 Ollama のモデルを操作できます（Open WebUI の Ollama 管理画面に相当）。
+
+- **一覧**：サイズ、パラメータ数、量子化、更新日時、ロード中かどうか（VRAM 使用量と期限）、そのモデルを使っているエイリアスを表示します。
+- **取得（pull）**：`qwen3:8b` のようなライブラリ名や `hf.co/…` を指定します。進捗と転送速度を表示し、途中で中止できます。管理画面内で別のページに移っても続きますが、ブラウザのタブを閉じると中断します（もう一度 pull すると続きから再開します）。
+- **作成**：ベースモデル・システムプロンプト・パラメータ（JSON）・テンプレートを入力するか、Modelfile を貼り付けます。「派生」を押すと、既存モデルの設定を読み込んだ状態で作成画面を開きます。GGUF ファイルや ADAPTER からの作成には対応していません。
+- **コピー**、**削除**、**アンロード**（メモリから降ろす）。エイリアスが使っているモデルを削除するときは警告します。
+
+操作は監査ログ（`ollama.pull` など）に記録し、終わったらプロバイダのモデル一覧（エイリアス作成時の候補）を更新します。公開 API の `/api/pull` などは引き続き 403 のままで、キーを持つクライアントからは操作できません。
 
 ### フォールバック
 
